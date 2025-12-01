@@ -42,41 +42,6 @@ jobs:
         gcloud auth list
         gcloud config get-value project
 
-    - name: Configurar Docker para Artifact Registry
-      run: |
-        echo "Configurando Docker para Artifact Registry..."
-        gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
-
-    - name: Construir imagen Docker
-      run: |
-        echo "Construyendo imagen Docker..."
-        IMAGE_TAG="${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/cloud-functions/${{ env.FUNCTION_NAME }}:${{ github.sha }}"
-        echo "Tag de imagen: $IMAGE_TAG"
-        docker build -t $IMAGE_TAG .
-        docker tag $IMAGE_TAG ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/cloud-functions/${{ env.FUNCTION_NAME }}:latest
-        echo "Imagen construida exitosamente"
-
-    - name: Verificar repositorio Artifact Registry
-      run: |
-        echo "Verificando si el repositorio existe..."
-        if gcloud artifacts repositories describe cloud-functions \
-          --location=${{ env.REGION }} \
-          --project=${{ env.PROJECT_ID }} 2>&1; then
-          echo "Repositorio existe, continuando..."
-        else
-          echo "ERROR: El repositorio 'cloud-functions' no existe en Artifact Registry"
-          echo "Por favor, crealo manualmente o pide a un administrador que lo cree:"
-          echo "gcloud artifacts repositories create cloud-functions --repository-format=docker --location=${{ env.REGION }} --project=${{ env.PROJECT_ID }}"
-          exit 1
-        fi
-
-    - name: Subir imagen a Artifact Registry
-      run: |
-        echo "Subiendo imagen a Artifact Registry..."
-        echo "Haciendo push de la imagen..."
-        docker push ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/cloud-functions/${{ env.FUNCTION_NAME }}:${{ github.sha }} || exit 1
-        docker push ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/cloud-functions/${{ env.FUNCTION_NAME }}:latest || exit 1
-        echo "Imagen subida exitosamente"
 
     - name: Desplegar función a Cloud Functions (Gen 2)
       run: |
