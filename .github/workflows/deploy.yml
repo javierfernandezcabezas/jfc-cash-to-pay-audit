@@ -11,7 +11,7 @@ env:
   PROJECT_ID: check-in-sf
   FUNCTION_NAME: jfc-cash-to-pay-audit
   REGION: us-central1
-  SERVICE_ACCOUNT: ${{ secrets.GCP_SA_EMAIL }}
+  SERVICE_ACCOUNT: github-actions@check-in-sf.iam.gserviceaccount.com
   ARTIFACT_REGISTRY: ${{ secrets.ARTIFACT_REGISTRY || format('{0}-docker.pkg.dev', env.PROJECT_ID) }}
 
 jobs:
