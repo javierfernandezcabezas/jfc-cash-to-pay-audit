@@ -6,17 +6,12 @@ on:
       - main
       - master
   workflow_dispatch: # Permite ejecución manual
-  pull_request:
-    branches:
-      - main
-      - master
 
 env:
   PROJECT_ID: check-in-sf
   FUNCTION_NAME: jfc-cash-to-pay-audit
   REGION: us-central1
   SERVICE_ACCOUNT: github-actions@check-in-sf.iam.gserviceaccount.com
-  ARTIFACT_REGISTRY: ${{ secrets.ARTIFACT_REGISTRY || format('{0}-docker.pkg.dev', env.PROJECT_ID) }}
 
 jobs:
   deploy:
@@ -38,8 +33,10 @@ jobs:
 
     - name: Configurar Cloud SDK
       uses: google-github-actions/setup-gcloud@v2
+      with:
+        project_id: ${{ env.PROJECT_ID }}
 
-    - name: Configurar Docker para usar gcloud como helper
+    - name: Configurar Docker para Artifact Registry
       run: |
         gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
 
@@ -51,11 +48,12 @@ jobs:
 
     - name: Subir imagen a Artifact Registry
       run: |
-        # Crear repositorio si no existe
+        # Crear repositorio si no existe (ignorar error si ya existe)
         gcloud artifacts repositories create cloud-functions \
           --repository-format=docker \
           --location=${{ env.REGION }} \
-          --description="Repositorio para Cloud Functions" || true
+          --description="Repositorio para Cloud Functions" \
+          --project=${{ env.PROJECT_ID }} 2>&1 || true
         
         docker push ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/cloud-functions/${{ env.FUNCTION_NAME }}:${{ github.sha }}
         docker push ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/cloud-functions/${{ env.FUNCTION_NAME }}:latest
@@ -64,9 +62,8 @@ jobs:
       run: |
         gcloud functions deploy ${{ env.FUNCTION_NAME }} \
           --gen2 \
-          --runtime=python311 \
           --region=${{ env.REGION }} \
-          --source=. \
+          --runtime=python311 \
           --entry-point=jfc_cash_to_pay_audit \
           --trigger-http \
           --allow-unauthenticated \
@@ -76,14 +73,15 @@ jobs:
           --service-account=${{ env.SERVICE_ACCOUNT }} \
           --docker-registry=artifact-registry \
           --docker-repository=cloud-functions \
-          --docker-image-prefix=${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/cloud-functions/${{ env.FUNCTION_NAME }}
+          --docker-image=${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/cloud-functions/${{ env.FUNCTION_NAME }}:${{ github.sha }} \
+          --project=${{ env.PROJECT_ID }}
 
     - name: Obtener URL de la función
       run: |
         FUNCTION_URL=$(gcloud functions describe ${{ env.FUNCTION_NAME }} \
           --gen2 \
           --region=${{ env.REGION }} \
-          --format="value(serviceConfig.uri)")
+          --format="value(serviceConfig.uri)" \
+          --project=${{ env.PROJECT_ID }})
         echo "::notice title=Function URL::La función está disponible en: $FUNCTION_URL"
         echo "FUNCTION_URL=$FUNCTION_URL" >> $GITHUB_OUTPUT
-
