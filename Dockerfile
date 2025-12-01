@@ -19,5 +19,6 @@ ENV PYTHONUNBUFFERED=1
 EXPOSE 8080
 
 # Comando para ejecutar la función usando Functions Framework
-CMD exec functions-framework --target=jfc_cash_to_pay_audit --port=$PORT --host=0.0.0.0
+# Cloud Run espera que el servicio escuche en el puerto definido por PORT
+CMD exec functions-framework --target=jfc_cash_to_pay_audit --port=${PORT:-8080} --host=0.0.0.0
 

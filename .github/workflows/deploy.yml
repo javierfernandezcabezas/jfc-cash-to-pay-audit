@@ -1,4 +1,4 @@
-name: Deploy to Google Cloud Functions
+name: Deploy to Cloud Run
 
 on:
   push:
@@ -9,7 +9,7 @@ on:
 
 env:
   PROJECT_ID: check-in-sf
-  FUNCTION_NAME: jfc-cash-to-pay-audit
+  SERVICE_NAME: jfc-cash-to-pay-audit
   REGION: us-central1
   SERVICE_ACCOUNT: github-actions@check-in-sf.iam.gserviceaccount.com
 
@@ -36,42 +36,54 @@ jobs:
       with:
         project_id: ${{ env.PROJECT_ID }}
 
-    - name: Verificar autenticación
+    - name: Configurar Docker para Artifact Registry
       run: |
-        echo "Verificando autenticación..."
-        gcloud auth list
-        gcloud config get-value project
+        echo "Configurando Docker para Artifact Registry..."
+        gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
 
-
-    - name: Desplegar función a Cloud Functions (Gen 2)
+    - name: Construir imagen Docker
       run: |
-        echo "Desplegando función a Cloud Functions Gen 2..."
-        echo "gcloud detectará automáticamente el Dockerfile y construirá la imagen..."
+        echo "Construyendo imagen Docker..."
+        IMAGE_TAG="${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/cloud-functions/${{ env.SERVICE_NAME }}:${{ github.sha }}"
+        echo "Tag de imagen: $IMAGE_TAG"
+        docker build -t $IMAGE_TAG .
+        docker tag $IMAGE_TAG ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/cloud-functions/${{ env.SERVICE_NAME }}:latest
+        echo "Imagen construida exitosamente"
+
+    - name: Subir imagen a Artifact Registry
+      run: |
+        echo "Subiendo imagen a Artifact Registry..."
+        docker push ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/cloud-functions/${{ env.SERVICE_NAME }}:${{ github.sha }} || exit 1
+        docker push ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/cloud-functions/${{ env.SERVICE_NAME }}:latest || exit 1
+        echo "Imagen subida exitosamente"
+
+    - name: Desplegar a Cloud Run
+      run: |
+        echo "Desplegando a Cloud Run con imagen Docker..."
+        IMAGE_URI="${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/cloud-functions/${{ env.SERVICE_NAME }}:${{ github.sha }}"
+        echo "URI de imagen: $IMAGE_URI"
         
-        gcloud functions deploy ${{ env.FUNCTION_NAME }} \
-          --gen2 \
+        gcloud run deploy ${{ env.SERVICE_NAME }} \
+          --image=$IMAGE_URI \
           --region=${{ env.REGION }} \
-          --runtime=python311 \
-          --source=. \
-          --entry-point=jfc_cash_to_pay_audit \
-          --trigger-http \
+          --platform=managed \
           --allow-unauthenticated \
-          --memory=256MB \
-          --timeout=60s \
-          --max-instances=10 \
           --service-account=${{ env.SERVICE_ACCOUNT }} \
+          --memory=256Mi \
+          --timeout=60 \
+          --max-instances=10 \
+          --port=8080 \
           --project=${{ env.PROJECT_ID }} \
-          --quiet || (echo "Error en despliegue. Verificando función existente..." && gcloud functions describe ${{ env.FUNCTION_NAME }} --gen2 --region=${{ env.REGION }} --project=${{ env.PROJECT_ID }} 2>&1 || true && exit 1)
+          --quiet
 
-    - name: Obtener URL de la función
+    - name: Obtener URL del servicio
       if: success()
       run: |
-        echo "Obteniendo URL de la función..."
-        FUNCTION_URL=$(gcloud functions describe ${{ env.FUNCTION_NAME }} \
-          --gen2 \
+        echo "Obteniendo URL del servicio Cloud Run..."
+        SERVICE_URL=$(gcloud run services describe ${{ env.SERVICE_NAME }} \
           --region=${{ env.REGION }} \
-          --format="value(serviceConfig.uri)" \
+          --format="value(status.url)" \
           --project=${{ env.PROJECT_ID }})
-        echo "::notice title=Function URL::La función está disponible en: $FUNCTION_URL"
-        echo "FUNCTION_URL=$FUNCTION_URL" >> $GITHUB_OUTPUT
-        echo "URL de la función: $FUNCTION_URL"
+        echo "::notice title=Service URL::El servicio está disponible en: $SERVICE_URL"
+        echo "SERVICE_URL=$SERVICE_URL" >> $GITHUB_OUTPUT
+        echo "URL del servicio: $SERVICE_URL"
