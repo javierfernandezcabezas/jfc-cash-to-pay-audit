@@ -57,9 +57,19 @@ jobs:
         docker push ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/cloud-functions/${{ env.SERVICE_NAME }}:latest || exit 1
         echo "Imagen subida exitosamente"
 
-    - name: Desplegar a Cloud Run
+    - name: Eliminar función anterior de Cloud Functions (si existe)
       run: |
-        echo "Desplegando a Cloud Run con imagen Docker..."
+        echo "Verificando si existe función anterior de Cloud Functions..."
+        if gcloud functions describe ${{ env.SERVICE_NAME }} --gen2 --region=${{ env.REGION }} --project=${{ env.PROJECT_ID }} 2>&1; then
+          echo "Eliminando función anterior de Cloud Functions..."
+          gcloud functions delete ${{ env.SERVICE_NAME }} --gen2 --region=${{ env.REGION }} --project=${{ env.PROJECT_ID }} --quiet || true
+        else
+          echo "No existe función anterior, continuando..."
+        fi
+
+    - name: Desplegar a Cloud Run (Container)
+      run: |
+        echo "Desplegando a Cloud Run con imagen Docker (Container deployment)..."
         IMAGE_URI="${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/cloud-functions/${{ env.SERVICE_NAME }}:${{ github.sha }}"
         echo "URI de imagen: $IMAGE_URI"
         
@@ -74,6 +84,7 @@ jobs:
           --max-instances=10 \
           --port=8080 \
           --project=${{ env.PROJECT_ID }} \
+          --no-source \
           --quiet
 
     - name: Obtener URL del servicio
