@@ -36,30 +36,47 @@ jobs:
       with:
         project_id: ${{ env.PROJECT_ID }}
 
+    - name: Verificar autenticación
+      run: |
+        echo "Verificando autenticación..."
+        gcloud auth list
+        gcloud config get-value project
+
     - name: Configurar Docker para Artifact Registry
       run: |
+        echo "Configurando Docker para Artifact Registry..."
         gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
 
     - name: Construir imagen Docker
       run: |
-        docker build -t ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/cloud-functions/${{ env.FUNCTION_NAME }}:${{ github.sha }} .
-        docker tag ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/cloud-functions/${{ env.FUNCTION_NAME }}:${{ github.sha }} \
-          ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/cloud-functions/${{ env.FUNCTION_NAME }}:latest
+        echo "Construyendo imagen Docker..."
+        IMAGE_TAG="${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/cloud-functions/${{ env.FUNCTION_NAME }}:${{ github.sha }}"
+        echo "Tag de imagen: $IMAGE_TAG"
+        docker build -t $IMAGE_TAG .
+        docker tag $IMAGE_TAG ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/cloud-functions/${{ env.FUNCTION_NAME }}:latest
+        echo "Imagen construida exitosamente"
 
     - name: Subir imagen a Artifact Registry
       run: |
+        echo "Subiendo imagen a Artifact Registry..."
         # Crear repositorio si no existe (ignorar error si ya existe)
         gcloud artifacts repositories create cloud-functions \
           --repository-format=docker \
           --location=${{ env.REGION }} \
           --description="Repositorio para Cloud Functions" \
-          --project=${{ env.PROJECT_ID }} 2>&1 || true
+          --project=${{ env.PROJECT_ID }} 2>&1 || echo "Repositorio ya existe o error al crear (continuando...)"
         
-        docker push ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/cloud-functions/${{ env.FUNCTION_NAME }}:${{ github.sha }}
-        docker push ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/cloud-functions/${{ env.FUNCTION_NAME }}:latest
+        echo "Haciendo push de la imagen..."
+        docker push ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/cloud-functions/${{ env.FUNCTION_NAME }}:${{ github.sha }} || exit 1
+        docker push ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/cloud-functions/${{ env.FUNCTION_NAME }}:latest || exit 1
+        echo "Imagen subida exitosamente"
 
     - name: Desplegar función a Cloud Functions (Gen 2)
       run: |
+        echo "Desplegando función a Cloud Functions Gen 2..."
+        IMAGE_URI="${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/cloud-functions/${{ env.FUNCTION_NAME }}:${{ github.sha }}"
+        echo "URI de imagen: $IMAGE_URI"
+        
         gcloud functions deploy ${{ env.FUNCTION_NAME }} \
           --gen2 \
           --region=${{ env.REGION }} \
@@ -73,11 +90,14 @@ jobs:
           --service-account=${{ env.SERVICE_ACCOUNT }} \
           --docker-registry=artifact-registry \
           --docker-repository=cloud-functions \
-          --docker-image=${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/cloud-functions/${{ env.FUNCTION_NAME }}:${{ github.sha }} \
-          --project=${{ env.PROJECT_ID }}
+          --docker-image=$IMAGE_URI \
+          --project=${{ env.PROJECT_ID }} \
+          --quiet || (echo "Error en despliegue. Verificando función existente..." && gcloud functions describe ${{ env.FUNCTION_NAME }} --gen2 --region=${{ env.REGION }} --project=${{ env.PROJECT_ID }} 2>&1 || true && exit 1)
 
     - name: Obtener URL de la función
+      if: success()
       run: |
+        echo "Obteniendo URL de la función..."
         FUNCTION_URL=$(gcloud functions describe ${{ env.FUNCTION_NAME }} \
           --gen2 \
           --region=${{ env.REGION }} \
@@ -85,3 +105,4 @@ jobs:
           --project=${{ env.PROJECT_ID }})
         echo "::notice title=Function URL::La función está disponible en: $FUNCTION_URL"
         echo "FUNCTION_URL=$FUNCTION_URL" >> $GITHUB_OUTPUT
+        echo "URL de la función: $FUNCTION_URL"
