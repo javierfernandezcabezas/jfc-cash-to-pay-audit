@@ -81,7 +81,7 @@ jobs:
     - name: Desplegar función a Cloud Functions (Gen 2)
       run: |
         echo "Desplegando función a Cloud Functions Gen 2..."
-        echo "Usando Cloud Build para construir y desplegar desde Dockerfile..."
+        echo "gcloud detectará automáticamente el Dockerfile y construirá la imagen..."
         
         gcloud functions deploy ${{ env.FUNCTION_NAME }} \
           --gen2 \
@@ -95,8 +95,6 @@ jobs:
           --timeout=60s \
           --max-instances=10 \
           --service-account=${{ env.SERVICE_ACCOUNT }} \
-          --docker-registry=artifact-registry \
-          --docker-repository=${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/cloud-functions \
           --project=${{ env.PROJECT_ID }} \
           --quiet || (echo "Error en despliegue. Verificando función existente..." && gcloud functions describe ${{ env.FUNCTION_NAME }} --gen2 --region=${{ env.REGION }} --project=${{ env.PROJECT_ID }} 2>&1 || true && exit 1)
 
