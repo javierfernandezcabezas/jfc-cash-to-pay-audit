@@ -82,7 +82,9 @@ jobs:
       run: |
         echo "Desplegando función a Cloud Functions Gen 2..."
         IMAGE_URI="${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/cloud-functions/${{ env.FUNCTION_NAME }}:${{ github.sha }}"
+        DOCKER_REPO="${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/cloud-functions"
         echo "URI de imagen: $IMAGE_URI"
+        echo "Repositorio Docker: $DOCKER_REPO"
         
         gcloud functions deploy ${{ env.FUNCTION_NAME }} \
           --gen2 \
@@ -95,8 +97,6 @@ jobs:
           --timeout=60s \
           --max-instances=10 \
           --service-account=${{ env.SERVICE_ACCOUNT }} \
-          --docker-registry=artifact-registry \
-          --docker-repository=cloud-functions \
           --docker-image=$IMAGE_URI \
           --project=${{ env.PROJECT_ID }} \
           --quiet || (echo "Error en despliegue. Verificando función existente..." && gcloud functions describe ${{ env.FUNCTION_NAME }} --gen2 --region=${{ env.REGION }} --project=${{ env.PROJECT_ID }} 2>&1 || true && exit 1)
