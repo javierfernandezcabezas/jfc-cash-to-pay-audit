@@ -6,6 +6,10 @@ on:
       - main
       - master
   workflow_dispatch: # Permite ejecución manual
+  pull_request:
+    branches:
+      - main
+      - master
 
 env:
   PROJECT_ID: check-in-sf
