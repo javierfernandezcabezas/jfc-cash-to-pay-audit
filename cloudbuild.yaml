@@ -1,0 +1,51 @@
+# Configuración alternativa para Cloud Build (opcional)
+# Puedes usar esto si prefieres Cloud Build en lugar de GitHub Actions
+
+steps:
+  # Construir la imagen Docker
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '-t'
+      - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/cloud-functions/${_FUNCTION_NAME}:${SHORT_SHA}'
+      - '-t'
+      - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/cloud-functions/${_FUNCTION_NAME}:latest'
+      - '.'
+
+  # Subir la imagen a Artifact Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'push'
+      - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/cloud-functions/${_FUNCTION_NAME}:${SHORT_SHA}'
+  
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'push'
+      - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/cloud-functions/${_FUNCTION_NAME}:latest'
+
+  # Desplegar la función
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - 'functions'
+      - 'deploy'
+      - '${_FUNCTION_NAME}'
+      - '--gen2'
+      - '--region=${_REGION}'
+      - '--source=.'
+      - '--entry-point=jfc_cash_to_pay_audit'
+      - '--trigger-http'
+      - '--allow-unauthenticated'
+      - '--memory=256MB'
+      - '--timeout=60s'
+      - '--max-instances=10'
+      - '--docker-registry=artifact-registry'
+      - '--docker-repository=cloud-functions'
+
+substitutions:
+  _FUNCTION_NAME: jfc-cash-to-pay-audit
+  _REGION: us-central1
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+

@@ -1,0 +1,85 @@
+name: Deploy to Google Cloud Functions
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  workflow_dispatch: # Permite ejecución manual
+
+env:
+  PROJECT_ID: check-in-sf
+  FUNCTION_NAME: jfc-cash-to-pay-audit
+  REGION: us-central1
+  SERVICE_ACCOUNT: ${{ secrets.GCP_SA_EMAIL }}
+  ARTIFACT_REGISTRY: ${{ secrets.ARTIFACT_REGISTRY || format('{0}-docker.pkg.dev', env.PROJECT_ID) }}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+    - name: Checkout código
+      uses: actions/checkout@v4
+
+    - name: Autenticación con Google Cloud
+      id: auth
+      uses: google-github-actions/auth@v2
+      with:
+        credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+    - name: Configurar Cloud SDK
+      uses: google-github-actions/setup-gcloud@v2
+
+    - name: Configurar Docker para usar gcloud como helper
+      run: |
+        gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
+
+    - name: Construir imagen Docker
+      run: |
+        docker build -t ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/cloud-functions/${{ env.FUNCTION_NAME }}:${{ github.sha }} .
+        docker tag ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/cloud-functions/${{ env.FUNCTION_NAME }}:${{ github.sha }} \
+          ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/cloud-functions/${{ env.FUNCTION_NAME }}:latest
+
+    - name: Subir imagen a Artifact Registry
+      run: |
+        # Crear repositorio si no existe
+        gcloud artifacts repositories create cloud-functions \
+          --repository-format=docker \
+          --location=${{ env.REGION }} \
+          --description="Repositorio para Cloud Functions" || true
+        
+        docker push ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/cloud-functions/${{ env.FUNCTION_NAME }}:${{ github.sha }}
+        docker push ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/cloud-functions/${{ env.FUNCTION_NAME }}:latest
+
+    - name: Desplegar función a Cloud Functions (Gen 2)
+      run: |
+        gcloud functions deploy ${{ env.FUNCTION_NAME }} \
+          --gen2 \
+          --runtime=python311 \
+          --region=${{ env.REGION }} \
+          --source=. \
+          --entry-point=jfc_cash_to_pay_audit \
+          --trigger-http \
+          --allow-unauthenticated \
+          --memory=256MB \
+          --timeout=60s \
+          --max-instances=10 \
+          --service-account=${{ env.SERVICE_ACCOUNT }} \
+          --docker-registry=artifact-registry \
+          --docker-repository=cloud-functions \
+          --docker-image-prefix=${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/cloud-functions/${{ env.FUNCTION_NAME }}
+
+    - name: Obtener URL de la función
+      run: |
+        FUNCTION_URL=$(gcloud functions describe ${{ env.FUNCTION_NAME }} \
+          --gen2 \
+          --region=${{ env.REGION }} \
+          --format="value(serviceConfig.uri)")
+        echo "::notice title=Function URL::La función está disponible en: $FUNCTION_URL"
+        echo "FUNCTION_URL=$FUNCTION_URL" >> $GITHUB_OUTPUT
+
