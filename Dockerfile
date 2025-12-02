@@ -10,6 +10,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copiar código de la función
 COPY main.py .
+COPY export_to_sheets.py .
 
 # Configurar variables de entorno
 ENV PORT=8080
