@@ -21,6 +21,9 @@ logger = logging.getLogger(__name__)
 PROJECT_ID = os.environ.get('PROJECT_ID', 'workflows-and-automations-1')
 DATASET_ID = 'amn_op_automatic_invoicing'
 
+# Configuración de Google Sheets
+GOOGLE_SHEETS_ID = os.environ.get('GOOGLE_SHEETS_ID', '14zyGkUGjj3HP4klvwmUKHukHc_1eN6FRLAazcwoNQZ8')
+
 # Tablas
 HIST = f'{PROJECT_ID}.{DATASET_ID}.historic_order_item_sales'
 T_CC = f'{PROJECT_ID}.{DATASET_ID}.Commercial_Condition__c'
@@ -340,7 +343,7 @@ def save_results_to_bigquery(results: list, table_name: str, dataset_id: str = D
 
 def export_to_sheets_if_configured(results: list, sheet_id: str = None, sheet_name: str = None):
     """Exporta resultados a Google Sheets si está configurado"""
-    sheet_id = sheet_id or os.environ.get('GOOGLE_SHEETS_ID')
+    sheet_id = sheet_id or GOOGLE_SHEETS_ID
     sheet_name = sheet_name or os.environ.get('GOOGLE_SHEETS_NAME', 'Results')
     
     if not sheet_id:
@@ -400,17 +403,19 @@ def jfc_cash_to_pay_audit(request: Request) -> Dict[str, Any]:
         if query_type == 'invoice_summary':
             results = get_invoice_summary(where_clause)
             table_name = f'invoice_summary_{datetime.now().strftime("%Y%m%d")}'
+            sheet_name = 'Invoice Summary'
         elif query_type == 'settlement_summary':
             results = get_settlement_summary(where_clause)
             table_name = f'settlement_summary_{datetime.now().strftime("%Y%m%d")}'
+            sheet_name = 'Settlement Summary'
         else:
             return (json.dumps({"error": "Tipo de query no válido"}), 400, headers)
         
         # Guardar resultados en BigQuery
         save_results_to_bigquery(results, table_name)
         
-        # Exportar a Google Sheets si está configurado
-        export_to_sheets_if_configured(results, sheet_name=table_name)
+        # Exportar a Google Sheets (siempre, usando el spreadsheet configurado)
+        export_to_sheets_if_configured(results, sheet_name=sheet_name)
         
         result = {
             "status": "success",

@@ -78,12 +78,17 @@ def export_to_sheets(
             logger.error(f"Error al verificar/crear hoja: {e}")
             return
         
-        # Limpiar contenido existente
-        range_name = f"{sheet_name}!A1:Z10000"
-        service.spreadsheets().values().clear(
-            spreadsheetId=spreadsheet_id,
-            range=range_name
-        ).execute()
+        # Limpiar contenido existente (sobrescribir todo)
+        # Usar un rango grande para asegurar que se limpie todo
+        range_name = f"{sheet_name}!A1:ZZ10000"
+        try:
+            service.spreadsheets().values().clear(
+                spreadsheetId=spreadsheet_id,
+                range=range_name
+            ).execute()
+            logger.info(f"Contenido anterior de la hoja '{sheet_name}' limpiado")
+        except HttpError as e:
+            logger.warning(f"No se pudo limpiar la hoja (puede que no exista): {e}")
         
         # Escribir datos
         body = {'values': values}
