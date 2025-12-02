@@ -1,0 +1,102 @@
+"""
+Módulo para exportar resultados de BigQuery a Google Sheets
+"""
+
+import logging
+from typing import List, Dict, Any
+from google.oauth2 import service_account
+from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
+
+logger = logging.getLogger(__name__)
+
+SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
+
+
+def export_to_sheets(
+    spreadsheet_id: str,
+    sheet_name: str,
+    data: List[Dict[str, Any]],
+    credentials_path: str = None
+):
+    """
+    Exporta datos a Google Sheets
+    
+    Args:
+        spreadsheet_id: ID de la hoja de cálculo de Google Sheets
+        sheet_name: Nombre de la hoja dentro del spreadsheet
+        data: Lista de diccionarios con los datos a exportar
+        credentials_path: Ruta al archivo de credenciales (opcional)
+    """
+    if not data:
+        logger.warning("No hay datos para exportar")
+        return
+    
+    try:
+        # Obtener credenciales
+        if credentials_path:
+            creds = service_account.Credentials.from_service_account_file(
+                credentials_path, scopes=SCOPES
+            )
+        else:
+            # Usar credenciales por defecto (Application Default Credentials)
+            from google.auth import default
+            creds, _ = default(scopes=SCOPES)
+        
+        service = build('sheets', 'v4', credentials=creds)
+        
+        # Preparar datos: encabezados + filas
+        if not data:
+            return
+        
+        headers = list(data[0].keys())
+        values = [headers] + [[str(row.get(h, '')) for h in headers] for row in data]
+        
+        # Limpiar hoja existente o crear nueva
+        try:
+            # Intentar obtener la hoja
+            spreadsheet = service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
+            sheet_exists = any(s['properties']['title'] == sheet_name 
+                             for s in spreadsheet.get('sheets', []))
+            
+            if not sheet_exists:
+                # Crear nueva hoja
+                request_body = {
+                    'requests': [{
+                        'addSheet': {
+                            'properties': {
+                                'title': sheet_name
+                            }
+                        }
+                    }]
+                }
+                service.spreadsheets().batchUpdate(
+                    spreadsheetId=spreadsheet_id,
+                    body=request_body
+                ).execute()
+        except HttpError as e:
+            logger.error(f"Error al verificar/crear hoja: {e}")
+            return
+        
+        # Limpiar contenido existente
+        range_name = f"{sheet_name}!A1:Z10000"
+        service.spreadsheets().values().clear(
+            spreadsheetId=spreadsheet_id,
+            range=range_name
+        ).execute()
+        
+        # Escribir datos
+        body = {'values': values}
+        result = service.spreadsheets().values().update(
+            spreadsheetId=spreadsheet_id,
+            range=f"{sheet_name}!A1",
+            valueInputOption='RAW',
+            body=body
+        ).execute()
+        
+        logger.info(f"Datos exportados exitosamente: {result.get('updatedCells')} celdas actualizadas")
+        
+    except HttpError as e:
+        logger.error(f"Error exportando a Google Sheets: {e}")
+        raise
+

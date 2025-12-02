@@ -327,6 +327,25 @@ def save_results_to_bigquery(results: list, table_name: str, dataset_id: str = D
     logger.info(f"Resultados guardados en {table_name}: {len(results)} filas")
 
 
+def export_to_sheets_if_configured(results: list, sheet_id: str = None, sheet_name: str = None):
+    """Exporta resultados a Google Sheets si está configurado"""
+    sheet_id = sheet_id or os.environ.get('GOOGLE_SHEETS_ID')
+    sheet_name = sheet_name or os.environ.get('GOOGLE_SHEETS_NAME', 'Results')
+    
+    if not sheet_id:
+        logger.info("Google Sheets ID no configurado, omitiendo exportación")
+        return
+    
+    try:
+        from export_to_sheets import export_to_sheets
+        export_to_sheets(sheet_id, sheet_name, results)
+        logger.info(f"Resultados exportados a Google Sheets: {sheet_id}/{sheet_name}")
+    except ImportError:
+        logger.warning("Módulo export_to_sheets no disponible")
+    except Exception as e:
+        logger.error(f"Error exportando a Google Sheets: {e}")
+
+
 def jfc_cash_to_pay_audit(request: Request) -> Dict[str, Any]:
     """
     Función HTTP que ejecuta queries de BigQuery y guarda resultados
@@ -378,6 +397,9 @@ def jfc_cash_to_pay_audit(request: Request) -> Dict[str, Any]:
         
         # Guardar resultados en BigQuery
         save_results_to_bigquery(results, table_name)
+        
+        # Exportar a Google Sheets si está configurado
+        export_to_sheets_if_configured(results, sheet_name=table_name)
         
         result = {
             "status": "success",
