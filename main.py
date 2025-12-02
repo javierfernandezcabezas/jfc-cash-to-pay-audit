@@ -11,7 +11,7 @@ from typing import Any, Dict, Optional
 
 from flask import Request
 from google.cloud import bigquery
-from google.oauth2 import service_account
+from google.auth import default
 
 # Configurar logging
 logging.basicConfig(level=logging.INFO)
@@ -31,8 +31,19 @@ T_ACCOUNT = f'{PROJECT_ID}.{DATASET_ID}.Account'
 
 # Inicializar cliente de BigQuery
 def get_bigquery_client():
-    """Obtiene cliente de BigQuery con credenciales del servicio"""
-    return bigquery.Client(project=PROJECT_ID)
+    """
+    Obtiene cliente de BigQuery usando Application Default Credentials.
+    Esto usará la cuenta de servicio del servicio Cloud Run si está configurada,
+    o las credenciales del entorno si están disponibles.
+    """
+    try:
+        # Intentar usar Application Default Credentials
+        client = bigquery.Client(project=PROJECT_ID)
+        return client
+    except Exception as e:
+        logger.error(f"Error inicializando cliente BigQuery: {e}")
+        # Fallback: crear cliente sin especificar proyecto
+        return bigquery.Client()
 
 
 def execute_query(query: str, params: Optional[Dict] = None) -> list:
