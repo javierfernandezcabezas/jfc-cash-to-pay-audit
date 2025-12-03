@@ -215,115 +215,218 @@ def get_partner_summary(where_clause: str = '') -> list:
     WITH base AS (
       SELECT * FROM `{HIST}`{where_clause}
     ),
-    sessions AS (SELECT DISTINCT session_id FROM base),
+    sessions AS (
+      SELECT DISTINCT session_id, id_partner
+      FROM base
+    ),
     taxes_tab AS (
-      SELECT session_id, ds_tax_apply_to, SUM(nm_tax_rate)/100 AS tax
+      SELECT
+        session_id,
+        ds_tax_apply_to,
+        SUM(nm_tax_rate) / 100 AS tax
       FROM `{T_TAXES}`
       WHERE session_id IN (SELECT session_id FROM sessions)
       GROUP BY session_id, ds_tax_apply_to
     ),
-    -- Gross collected ejecutado: ft_collected_by_fever donde item_status != 'purchased'
-    gross_collected_tab AS (
-      SELECT 
-        CAST(REPLACE(id_partner, ',', '') AS INT64) AS id_partner,
-        SUM(CASE WHEN item_status != 'purchased' THEN ft_collected_by_fever ELSE 0 END) AS gross_collected_ejecutado
-      FROM base
-      GROUP BY 1
-    ),
-    -- Comisiones: validated/expired y canceled
-    commission_tab AS (
-      SELECT 
-        CAST(REPLACE(h.id_partner, ',', '') AS INT64) AS id_partner,
-        SUM(CASE 
-          WHEN h.item_status = 'validated/expired' THEN h.variable_cc_for_fever
-          WHEN h.item_status = 'canceled' THEN h.AMOUNT_TO_COLLECT_FEVER 
-          ELSE 0 
-        END) AS commission
-      FROM base h
-      GROUP BY 1
-    ),
-    -- Taxes de comisiones
-    commission_taxes_tab AS (
-      SELECT 
-        CAST(REPLACE(h.id_partner, ',', '') AS INT64) AS id_partner,
-        SUM(CASE 
-          WHEN h.item_status = 'validated/expired' THEN h.variable_cc_for_fever * COALESCE(ts.tax, td.tax, 0)
-          WHEN h.item_status = 'canceled' THEN h.AMOUNT_TO_COLLECT_FEVER * COALESCE(ts.tax, td.tax, 0)
-          ELSE 0 
-        END) AS commission_taxes
-      FROM base h
-      LEFT JOIN taxes_tab AS ts ON ts.session_id = h.session_id AND ts.ds_tax_apply_to = CAST(h.id_plan AS STRING)
-      LEFT JOIN taxes_tab AS td ON td.session_id = h.session_id AND td.ds_tax_apply_to = 'default'
-      GROUP BY 1
-    ),
-    -- Fixed fees: solo Marketing
     fixed_fees_tab_1 AS (
-      SELECT 
+      SELECT
         f.session_id,
+        f.cd_contract,
         f.ds_fixed_description,
+        f.ds_fixed_type,
+        f.apply_tax,
+        f.apply_to,
         f.fixed_fee_invoice,
+        f.fixed_fee_settlement,
         COALESCE(ts.tax, td.tax, 0) AS tax_rate_to_apply,
         CASE
           WHEN CAST(f.apply_tax AS STRING) = 'No' OR f.apply_tax = FALSE THEN 0
           ELSE f.fixed_fee_invoice * COALESCE(ts.tax, td.tax, 0)
-        END AS fixed_fee_invoice_tax
+        END AS fixed_fee_invoice_tax,
+        CASE
+          WHEN f.ds_fixed_type = 'Cash advance' THEN 0
+          WHEN f.ds_fixed_type NOT IN ('Marketing','Cash advance')
+               AND (CAST(f.apply_to AS STRING) = 'No' OR f.apply_to = FALSE) THEN 0
+          ELSE f.fixed_fee_settlement * COALESCE(ts.tax, td.tax, 0)
+        END AS fixed_fee_settlement_tax
       FROM `{T_FEES}` AS f
       JOIN sessions s USING (session_id)
-      LEFT JOIN taxes_tab AS ts ON ts.session_id = f.session_id AND ts.ds_tax_apply_to = f.ds_fixed_description
-      LEFT JOIN taxes_tab AS td ON td.session_id = f.session_id AND td.ds_tax_apply_to = 'default'
+      LEFT JOIN taxes_tab AS ts
+        ON ts.session_id = f.session_id
+       AND ts.ds_tax_apply_to = f.ds_fixed_description
+      LEFT JOIN taxes_tab AS td
+        ON td.session_id = f.session_id
+       AND td.ds_tax_apply_to = 'default'
     ),
-    marketing_fees_tab AS (
-      SELECT 
-        CAST(REPLACE(b.id_partner, ',', '') AS INT64) AS id_partner,
-        COALESCE(SUM(CASE WHEN f.ds_fixed_description = 'Marketing' THEN f.fixed_fee_invoice ELSE 0 END), 0) AS marketing_fees,
-        COALESCE(SUM(CASE WHEN f.ds_fixed_description = 'Marketing' THEN f.fixed_fee_invoice_tax ELSE 0 END), 0) AS marketing_fees_taxes
-      FROM base b
-      JOIN sessions s ON s.session_id = b.session_id
-      LEFT JOIN fixed_fees_tab_1 f ON f.session_id = b.session_id
+    fixed_fees_invoice AS (
+      SELECT
+        session_id,
+        COALESCE(
+          SUM(CASE WHEN ds_fixed_type = 'Marketing'
+                   THEN fixed_fee_invoice END), 0
+        ) AS mkt_fixed_fees,
+        SUM(fixed_fee_invoice)     AS fixed_fee_invoice,
+        SUM(fixed_fee_invoice_tax) AS fixed_fee_invoice_tax
+      FROM fixed_fees_tab_1
+      GROUP BY session_id
+    ),
+    fixed_fees_settlement AS (
+      SELECT
+        session_id,
+        COALESCE(SUM(
+          CASE WHEN ds_fixed_type = 'Marketing'
+               THEN fixed_fee_settlement END
+        ), 0) AS mkt_fixed_fees_base,
+        COALESCE(SUM(
+          CASE WHEN ds_fixed_type = 'Marketing'
+               THEN fixed_fee_settlement_tax END
+        ), 0) AS mkt_fixed_fees_tax,
+        COALESCE(SUM(
+          CASE WHEN ds_fixed_type = 'Cash advance'
+               THEN fixed_fee_settlement END
+        ), 0) AS cash_advance_base,
+        COALESCE(SUM(
+          CASE WHEN ds_fixed_type = 'Cash advance'
+               THEN fixed_fee_settlement_tax END
+        ), 0) AS cash_advance_tax,
+        COALESCE(SUM(
+          CASE
+            WHEN ds_fixed_type NOT IN ('Marketing','Cash advance')
+            THEN fixed_fee_settlement
+          END
+        ), 0) AS other_fixed_fees_base,
+        COALESCE(SUM(
+          CASE
+            WHEN ds_fixed_type NOT IN ('Marketing','Cash advance')
+            THEN fixed_fee_settlement_tax
+          END
+        ), 0) AS other_fixed_fees_tax
+      FROM fixed_fees_tab_1
+      GROUP BY session_id
+    ),
+    fixed_fees_invoice_partner AS (
+      SELECT
+        s.id_partner,
+        SUM(fi.mkt_fixed_fees)     AS invoice_mkt_fixed_fee,
+        SUM(fi.fixed_fee_invoice)  AS invoice_fixed_fees_base,
+        SUM(fi.fixed_fee_invoice_tax) AS invoice_fixed_fees_tax
+      FROM fixed_fees_invoice fi
+      JOIN sessions s USING (session_id)
+      GROUP BY s.id_partner
+    ),
+    fixed_fees_settlement_partner AS (
+      SELECT
+        s.id_partner,
+        SUM(fs.mkt_fixed_fees_base)     AS stl_mkt_base,
+        SUM(fs.mkt_fixed_fees_tax)      AS stl_mkt_tax,
+        SUM(fs.cash_advance_base)       AS stl_cash_base,
+        SUM(fs.cash_advance_tax)        AS stl_cash_tax,
+        SUM(fs.other_fixed_fees_base)   AS stl_other_base,
+        SUM(fs.other_fixed_fees_tax)    AS stl_other_tax
+      FROM fixed_fees_settlement fs
+      JOIN sessions s USING (session_id)
+      GROUP BY s.id_partner
+    ),
+    commission_invoice_partner AS (
+      SELECT
+        h.id_partner,
+        SUM(
+          CASE
+            WHEN h.item_status = 'validated/expired' THEN h.variable_cc_for_fever
+            WHEN h.item_status = 'canceled'           THEN h.AMOUNT_TO_COLLECT_FEVER
+            ELSE 0
+          END
+        ) AS ticketing_commission,
+        SUM(
+          CASE
+            WHEN h.item_status = 'validated/expired' THEN h.variable_cc_for_fever * COALESCE(ts.tax, td.tax, 0)
+            WHEN h.item_status = 'canceled'           THEN h.AMOUNT_TO_COLLECT_FEVER * COALESCE(ts.tax, td.tax, 0)
+            ELSE 0
+          END
+        ) AS tax_commission
+      FROM base h
+      LEFT JOIN taxes_tab AS ts
+        ON ts.session_id = h.session_id
+       AND ts.ds_tax_apply_to = CAST(h.id_plan AS STRING)
+      LEFT JOIN taxes_tab AS td
+        ON td.session_id = h.session_id
+       AND td.ds_tax_apply_to = 'default'
+      WHERE h.item_status IN ('validated/expired','canceled')
+      GROUP BY h.id_partner
+    ),
+    cancelled_info_tab AS (
+      SELECT
+        id_order_item,
+        IFNULL(-MAX(TOTAL_TRANSACTION_VALUE), 0) AS hist_gross_revenue,
+        IFNULL(-MAX(FT_COLLECTED_BY_FEVER), 0)   AS hist_collected_by_fever
+      FROM base
       GROUP BY 1
     ),
-    -- Total fixed fees (para el cálculo del pago al partner)
-    all_fixed_fees_tab AS (
-      SELECT 
-        CAST(REPLACE(b.id_partner, ',', '') AS INT64) AS id_partner,
-        COALESCE(SUM(f.fixed_fee_invoice), 0) AS total_fixed_fees,
-        COALESCE(SUM(f.fixed_fee_invoice_tax), 0) AS total_fixed_fees_taxes
-      FROM base b
-      JOIN sessions s ON s.session_id = b.session_id
-      LEFT JOIN fixed_fees_tab_1 f ON f.session_id = b.session_id
-      GROUP BY 1
+    consolidated_info_tab AS (
+      SELECT
+        h.id_order_item,
+        h.id_partner,
+        h.item_status,
+        CASE
+          WHEN h.item_status = 'canceled'
+            THEN c.hist_gross_revenue
+          ELSE h.total_transaction_value
+        END AS gross_transaction,
+        CASE
+          WHEN h.item_status = 'canceled'
+            THEN c.hist_collected_by_fever
+          ELSE h.ft_collected_by_fever
+        END AS collected_by_fever
+      FROM base h
+      LEFT JOIN cancelled_info_tab c USING (id_order_item)
     ),
-    -- Resultado final agrupado por partner
-    partner_summary AS (
-      SELECT 
-        COALESCE(gc.id_partner, c.id_partner, mf.id_partner, af.id_partner) AS id_partner,
-        COALESCE(gc.gross_collected_ejecutado, 0) AS gross_collected_ejecutado,
-        COALESCE(c.commission, 0) AS commission,
-        COALESCE(mf.marketing_fees, 0) AS marketing_fees,
-        COALESCE(ct.commission_taxes, 0) + COALESCE(mf.marketing_fees_taxes, 0) AS taxes_totales,
-        COALESCE(af.total_fixed_fees, 0) AS total_fixed_fees,
-        COALESCE(af.total_fixed_fees_taxes, 0) AS total_fixed_fees_taxes,
-        -- Pago al partner: gross_collected - comisiones - fixed_fees - taxes
-        COALESCE(gc.gross_collected_ejecutado, 0) 
-          - COALESCE(c.commission, 0) 
-          - COALESCE(af.total_fixed_fees, 0) 
-          - (COALESCE(ct.commission_taxes, 0) + COALESCE(mf.marketing_fees_taxes, 0)) AS pago_al_partner
-      FROM gross_collected_tab gc
-      FULL OUTER JOIN commission_tab c ON gc.id_partner = c.id_partner
-      FULL OUTER JOIN commission_taxes_tab ct ON COALESCE(gc.id_partner, c.id_partner) = ct.id_partner
-      FULL OUTER JOIN marketing_fees_tab mf ON COALESCE(gc.id_partner, c.id_partner) = mf.id_partner
-      FULL OUTER JOIN all_fixed_fees_tab af ON COALESCE(gc.id_partner, c.id_partner, mf.id_partner) = af.id_partner
+    revenue_by_partner AS (
+      SELECT
+        id_partner,
+        SUM(
+          CASE
+            WHEN item_status <> 'purchased'
+              THEN collected_by_fever
+            ELSE 0
+          END
+        ) AS revenue_collected_by_fever_no_purchased
+      FROM consolidated_info_tab
+      GROUP BY id_partner
     )
-    SELECT 
-      id_partner,
-      gross_collected_ejecutado,
-      commission,
-      marketing_fees,
-      taxes_totales,
-      pago_al_partner
-    FROM partner_summary
-    WHERE id_partner IS NOT NULL
-    ORDER BY id_partner
+    SELECT
+      CAST(p.id_partner AS INT64) AS id_partner,
+      COALESCE(r.revenue_collected_by_fever_no_purchased, 0) AS gross_collected,
+      COALESCE(ci.ticketing_commission, 0) AS commission,
+      (
+        COALESCE(ci.tax_commission, 0)
+        + COALESCE(fs.stl_mkt_tax,   0)
+        + COALESCE(fs.stl_cash_tax,  0)
+        + COALESCE(fs.stl_other_tax, 0)
+      ) AS total_taxes,
+      (
+        COALESCE(r.revenue_collected_by_fever_no_purchased, 0)
+        - COALESCE(ci.ticketing_commission, 0)
+        - (
+            COALESCE(fs.stl_mkt_base,   0)
+            + COALESCE(fs.stl_cash_base, 0)
+            + COALESCE(fs.stl_other_base, 0)
+          )
+        - (
+            COALESCE(ci.tax_commission, 0)
+            + COALESCE(fs.stl_mkt_tax,   0)
+            + COALESCE(fs.stl_cash_tax,  0)
+            + COALESCE(fs.stl_other_tax, 0)
+          )
+      ) AS pago_al_partner
+    FROM (
+      SELECT DISTINCT id_partner
+      FROM base
+    ) p
+    LEFT JOIN revenue_by_partner          r  ON p.id_partner = r.id_partner
+    LEFT JOIN commission_invoice_partner  ci ON p.id_partner = ci.id_partner
+    LEFT JOIN fixed_fees_invoice_partner  fi ON p.id_partner = fi.id_partner
+    LEFT JOIN fixed_fees_settlement_partner fs ON p.id_partner = fs.id_partner
+    ORDER BY CAST(p.id_partner AS INT64)
     """
     return execute_query(query)
 
