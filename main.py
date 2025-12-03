@@ -143,7 +143,7 @@ def get_invoice_summary(where_clause: str = '') -> list:
         f.fixed_fee_invoice,
         COALESCE(ts.tax, td.tax, 0) AS tax_rate_to_apply,
         CASE
-          WHEN f.apply_tax = 'No' THEN 0
+          WHEN CAST(f.apply_tax AS STRING) = 'No' OR f.apply_tax = FALSE THEN 0
           ELSE f.fixed_fee_invoice * COALESCE(ts.tax, td.tax, 0)
         END AS fixed_fee_invoice_tax,
         CASE 
@@ -234,7 +234,7 @@ def get_settlement_summary(where_clause: str = '') -> list:
       SELECT session_id,
              COALESCE(SUM(CASE WHEN ds_fixed_description = 'Marketing' THEN fixed_fee_settlement + fixed_fee_settlement_tax END),0) AS mkt_fixed_fees_w_tax,
              COALESCE(SUM(CASE WHEN ds_fixed_description = 'Cash advance' THEN fixed_fee_settlement END),0) AS cash_advance_w_tax,
-             COALESCE(SUM(CASE WHEN ds_fixed_description NOT IN ('Marketing','Cash advance') THEN CASE WHEN apply_tax = 'No' THEN fixed_fee_settlement
+             COALESCE(SUM(CASE WHEN ds_fixed_description NOT IN ('Marketing','Cash advance') THEN CASE WHEN CAST(apply_tax AS STRING) = 'No' OR apply_tax = FALSE THEN fixed_fee_settlement
              ELSE fixed_fee_settlement + fixed_fee_settlement_tax END END),0) AS other_fixed_fees_w_tax
       FROM fixed_fees_tab_1
       GROUP BY 1
