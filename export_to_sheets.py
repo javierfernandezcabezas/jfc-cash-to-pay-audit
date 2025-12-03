@@ -51,10 +51,17 @@ def export_to_sheets(
         
         headers = list(data[0].keys())
         
-        # Función para formatear valores numéricos con 2 decimales
+        # Función para formatear valores numéricos
         def format_value(value, header):
             if value is None or value == '':
                 return ''
+            # Si es id_partner, formatear como entero
+            if header == 'id_partner' or header.lower() == 'id_partner':
+                try:
+                    num_value = float(value)
+                    return str(int(num_value))
+                except (ValueError, TypeError):
+                    return str(value)
             # Si es un número, formatear con 2 decimales
             try:
                 num_value = float(value)
