@@ -235,7 +235,6 @@ def get_partner_summary(where_clause: str = '') -> list:
         f.ds_fixed_description,
         f.ds_fixed_type,
         f.apply_tax,
-        f.apply_to,
         f.fixed_fee_invoice,
         f.fixed_fee_settlement,
         COALESCE(ts.tax, td.tax, 0) AS tax_rate_to_apply,
@@ -246,7 +245,7 @@ def get_partner_summary(where_clause: str = '') -> list:
         CASE
           WHEN f.ds_fixed_type = 'Cash advance' THEN 0
           WHEN f.ds_fixed_type NOT IN ('Marketing','Cash advance')
-               AND (CAST(f.apply_to AS STRING) = 'No' OR f.apply_to = FALSE) THEN 0
+               AND (CAST(f.apply_tax AS STRING) = 'No' OR f.apply_tax = FALSE) THEN 0
           ELSE f.fixed_fee_settlement * COALESCE(ts.tax, td.tax, 0)
         END AS fixed_fee_settlement_tax
       FROM `{T_FEES}` AS f
