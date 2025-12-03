@@ -50,7 +50,22 @@ def export_to_sheets(
             return
         
         headers = list(data[0].keys())
-        values = [headers] + [[str(row.get(h, '')) for h in headers] for row in data]
+        
+        # Función para formatear valores numéricos con 2 decimales
+        def format_value(value, header):
+            if value is None or value == '':
+                return ''
+            # Si es un número, formatear con 2 decimales
+            try:
+                num_value = float(value)
+                # Formatear con 2 decimales, sin notación científica
+                return f"{num_value:.2f}"
+            except (ValueError, TypeError):
+                # Si no es número, devolver como string
+                return str(value)
+        
+        # Preparar valores con formato numérico
+        values = [headers] + [[format_value(row.get(h, ''), h) for h in headers] for row in data]
         
         # Limpiar hoja existente o crear nueva
         try:
