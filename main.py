@@ -305,7 +305,7 @@ def get_partner_summary(where_clause: str = '') -> list:
     ),
     fixed_fees_invoice_partner AS (
       SELECT
-        s.id_partner,
+        CAST(REPLACE(s.id_partner, ',', '') AS INT64) AS id_partner,
         SUM(fi.mkt_fixed_fees)     AS invoice_mkt_fixed_fee,
         SUM(fi.fixed_fee_invoice)  AS invoice_fixed_fees_base,
         SUM(fi.fixed_fee_invoice_tax) AS invoice_fixed_fees_tax
@@ -315,7 +315,7 @@ def get_partner_summary(where_clause: str = '') -> list:
     ),
     fixed_fees_settlement_partner AS (
       SELECT
-        s.id_partner,
+        CAST(REPLACE(s.id_partner, ',', '') AS INT64) AS id_partner,
         SUM(fs.mkt_fixed_fees_base)     AS stl_mkt_base,
         SUM(fs.mkt_fixed_fees_tax)      AS stl_mkt_tax,
         SUM(fs.cash_advance_base)       AS stl_cash_base,
@@ -328,7 +328,7 @@ def get_partner_summary(where_clause: str = '') -> list:
     ),
     commission_invoice_partner AS (
       SELECT
-        h.id_partner,
+        CAST(REPLACE(h.id_partner, ',', '') AS INT64) AS id_partner,
         SUM(
           CASE
             WHEN h.item_status = 'validated/expired' THEN h.variable_cc_for_fever
@@ -381,7 +381,7 @@ def get_partner_summary(where_clause: str = '') -> list:
     ),
     revenue_by_partner AS (
       SELECT
-        id_partner,
+        CAST(REPLACE(id_partner, ',', '') AS INT64) AS id_partner,
         SUM(
           CASE
             WHEN item_status <> 'purchased'
@@ -393,7 +393,7 @@ def get_partner_summary(where_clause: str = '') -> list:
       GROUP BY id_partner
     )
     SELECT
-      CAST(p.id_partner AS INT64) AS id_partner,
+      CAST(REPLACE(p.id_partner, ',', '') AS INT64) AS id_partner,
       COALESCE(r.revenue_collected_by_fever_no_purchased, 0) AS gross_collected,
       COALESCE(ci.ticketing_commission, 0) AS commission,
       (
@@ -418,14 +418,14 @@ def get_partner_summary(where_clause: str = '') -> list:
           )
       ) AS pago_al_partner
     FROM (
-      SELECT DISTINCT id_partner
+      SELECT DISTINCT CAST(REPLACE(id_partner, ',', '') AS INT64) AS id_partner
       FROM base
     ) p
     LEFT JOIN revenue_by_partner          r  ON p.id_partner = r.id_partner
     LEFT JOIN commission_invoice_partner  ci ON p.id_partner = ci.id_partner
     LEFT JOIN fixed_fees_invoice_partner  fi ON p.id_partner = fi.id_partner
     LEFT JOIN fixed_fees_settlement_partner fs ON p.id_partner = fs.id_partner
-    ORDER BY CAST(p.id_partner AS INT64)
+    ORDER BY p.id_partner
     """
     return execute_query(query)
 
