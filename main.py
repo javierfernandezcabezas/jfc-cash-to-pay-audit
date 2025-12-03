@@ -220,6 +220,7 @@ def get_settlement_summary(where_clause: str = '') -> list:
     ),
     fixed_fees_tab_1 AS (
       SELECT f.session_id, f.cd_contract, f.ds_fixed_description, f.fixed_fee_settlement,
+             f.apply_tax,
              COALESCE(ts.tax, td.tax, 0) AS tax_rate_to_apply,
              f.fixed_fee_settlement * COALESCE(ts.tax, td.tax, 0) AS fixed_fee_settlement_tax,
              CASE WHEN ts.tax IS NOT NULL THEN 'specific'
@@ -231,9 +232,9 @@ def get_settlement_summary(where_clause: str = '') -> list:
     ),
     fixed_fees_tab AS (
       SELECT session_id,
-             COALESCE(SUM(CASE WHEN ds_fixed_type = 'Marketing' THEN fixed_fee_settlement + fixed_fee_settlement_tax END),0) AS mkt_fixed_fees_w_tax,
-             COALESCE(SUM(CASE WHEN ds_fixed_type = 'Cash advance' THEN fixed_fee_settlement END),0) AS cash_advance_w_tax,
-             COALESCE(SUM(CASE WHEN ds_fixed_type NOT IN ('Marketing','Cash advance') THEN CASE WHEN apply_to = 'No' THEN fixed_fee_settlement
+             COALESCE(SUM(CASE WHEN ds_fixed_description = 'Marketing' THEN fixed_fee_settlement + fixed_fee_settlement_tax END),0) AS mkt_fixed_fees_w_tax,
+             COALESCE(SUM(CASE WHEN ds_fixed_description = 'Cash advance' THEN fixed_fee_settlement END),0) AS cash_advance_w_tax,
+             COALESCE(SUM(CASE WHEN ds_fixed_description NOT IN ('Marketing','Cash advance') THEN CASE WHEN apply_tax = 'No' THEN fixed_fee_settlement
              ELSE fixed_fee_settlement + fixed_fee_settlement_tax END END),0) AS other_fixed_fees_w_tax
       FROM fixed_fees_tab_1
       GROUP BY 1
