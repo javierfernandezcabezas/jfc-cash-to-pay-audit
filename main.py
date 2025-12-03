@@ -207,6 +207,127 @@ def get_invoice_summary(where_clause: str = '') -> list:
     return execute_query(query)
 
 
+def get_partner_summary(where_clause: str = '') -> list:
+    """
+    Query RESUMEN POR PARTNER - Una línea por partner_id con métricas acumuladas
+    """
+    query = f"""
+    WITH base AS (
+      SELECT * FROM `{HIST}`{where_clause}
+    ),
+    sessions AS (SELECT DISTINCT session_id FROM base),
+    taxes_tab AS (
+      SELECT session_id, ds_tax_apply_to, SUM(nm_tax_rate)/100 AS tax
+      FROM `{T_TAXES}`
+      WHERE session_id IN (SELECT session_id FROM sessions)
+      GROUP BY session_id, ds_tax_apply_to
+    ),
+    -- Gross collected ejecutado: ft_collected_by_fever donde item_status != 'purchased'
+    gross_collected_tab AS (
+      SELECT 
+        CAST(REPLACE(id_partner, ',', '') AS INT64) AS id_partner,
+        SUM(CASE WHEN item_status != 'purchased' THEN ft_collected_by_fever ELSE 0 END) AS gross_collected_ejecutado
+      FROM base
+      GROUP BY 1
+    ),
+    -- Comisiones: validated/expired y canceled
+    commission_tab AS (
+      SELECT 
+        CAST(REPLACE(h.id_partner, ',', '') AS INT64) AS id_partner,
+        SUM(CASE 
+          WHEN h.item_status = 'validated/expired' THEN h.variable_cc_for_fever
+          WHEN h.item_status = 'canceled' THEN h.AMOUNT_TO_COLLECT_FEVER 
+          ELSE 0 
+        END) AS commission
+      FROM base h
+      GROUP BY 1
+    ),
+    -- Taxes de comisiones
+    commission_taxes_tab AS (
+      SELECT 
+        CAST(REPLACE(h.id_partner, ',', '') AS INT64) AS id_partner,
+        SUM(CASE 
+          WHEN h.item_status = 'validated/expired' THEN h.variable_cc_for_fever * COALESCE(ts.tax, td.tax, 0)
+          WHEN h.item_status = 'canceled' THEN h.AMOUNT_TO_COLLECT_FEVER * COALESCE(ts.tax, td.tax, 0)
+          ELSE 0 
+        END) AS commission_taxes
+      FROM base h
+      LEFT JOIN taxes_tab AS ts ON ts.session_id = h.session_id AND ts.ds_tax_apply_to = CAST(h.id_plan AS STRING)
+      LEFT JOIN taxes_tab AS td ON td.session_id = h.session_id AND td.ds_tax_apply_to = 'default'
+      GROUP BY 1
+    ),
+    -- Fixed fees: solo Marketing
+    fixed_fees_tab_1 AS (
+      SELECT 
+        f.session_id,
+        f.ds_fixed_description,
+        f.fixed_fee_invoice,
+        COALESCE(ts.tax, td.tax, 0) AS tax_rate_to_apply,
+        CASE
+          WHEN CAST(f.apply_tax AS STRING) = 'No' OR f.apply_tax = FALSE THEN 0
+          ELSE f.fixed_fee_invoice * COALESCE(ts.tax, td.tax, 0)
+        END AS fixed_fee_invoice_tax
+      FROM `{T_FEES}` AS f
+      JOIN sessions s USING (session_id)
+      LEFT JOIN taxes_tab AS ts ON ts.session_id = f.session_id AND ts.ds_tax_apply_to = f.ds_fixed_description
+      LEFT JOIN taxes_tab AS td ON td.session_id = f.session_id AND td.ds_tax_apply_to = 'default'
+    ),
+    marketing_fees_tab AS (
+      SELECT 
+        CAST(REPLACE(b.id_partner, ',', '') AS INT64) AS id_partner,
+        COALESCE(SUM(CASE WHEN f.ds_fixed_description = 'Marketing' THEN f.fixed_fee_invoice ELSE 0 END), 0) AS marketing_fees,
+        COALESCE(SUM(CASE WHEN f.ds_fixed_description = 'Marketing' THEN f.fixed_fee_invoice_tax ELSE 0 END), 0) AS marketing_fees_taxes
+      FROM base b
+      JOIN sessions s ON s.session_id = b.session_id
+      LEFT JOIN fixed_fees_tab_1 f ON f.session_id = b.session_id
+      GROUP BY 1
+    ),
+    -- Total fixed fees (para el cálculo del pago al partner)
+    all_fixed_fees_tab AS (
+      SELECT 
+        CAST(REPLACE(b.id_partner, ',', '') AS INT64) AS id_partner,
+        COALESCE(SUM(f.fixed_fee_invoice), 0) AS total_fixed_fees,
+        COALESCE(SUM(f.fixed_fee_invoice_tax), 0) AS total_fixed_fees_taxes
+      FROM base b
+      JOIN sessions s ON s.session_id = b.session_id
+      LEFT JOIN fixed_fees_tab_1 f ON f.session_id = b.session_id
+      GROUP BY 1
+    ),
+    -- Resultado final agrupado por partner
+    partner_summary AS (
+      SELECT 
+        COALESCE(gc.id_partner, c.id_partner, mf.id_partner, af.id_partner) AS id_partner,
+        COALESCE(gc.gross_collected_ejecutado, 0) AS gross_collected_ejecutado,
+        COALESCE(c.commission, 0) AS commission,
+        COALESCE(mf.marketing_fees, 0) AS marketing_fees,
+        COALESCE(ct.commission_taxes, 0) + COALESCE(mf.marketing_fees_taxes, 0) AS taxes_totales,
+        COALESCE(af.total_fixed_fees, 0) AS total_fixed_fees,
+        COALESCE(af.total_fixed_fees_taxes, 0) AS total_fixed_fees_taxes,
+        -- Pago al partner: gross_collected - comisiones - fixed_fees - taxes
+        COALESCE(gc.gross_collected_ejecutado, 0) 
+          - COALESCE(c.commission, 0) 
+          - COALESCE(af.total_fixed_fees, 0) 
+          - (COALESCE(ct.commission_taxes, 0) + COALESCE(mf.marketing_fees_taxes, 0)) AS pago_al_partner
+      FROM gross_collected_tab gc
+      FULL OUTER JOIN commission_tab c ON gc.id_partner = c.id_partner
+      FULL OUTER JOIN commission_taxes_tab ct ON COALESCE(gc.id_partner, c.id_partner) = ct.id_partner
+      FULL OUTER JOIN marketing_fees_tab mf ON COALESCE(gc.id_partner, c.id_partner) = mf.id_partner
+      FULL OUTER JOIN all_fixed_fees_tab af ON COALESCE(gc.id_partner, c.id_partner, mf.id_partner) = af.id_partner
+    )
+    SELECT 
+      id_partner,
+      gross_collected_ejecutado,
+      commission,
+      marketing_fees,
+      taxes_totales,
+      pago_al_partner
+    FROM partner_summary
+    WHERE id_partner IS NOT NULL
+    ORDER BY id_partner
+    """
+    return execute_query(query)
+
+
 def get_settlement_summary(where_clause: str = '') -> list:
     """Query RESUMEN SETTLEMENT - Completa con CTEs"""
     query = f"""
@@ -387,7 +508,7 @@ def jfc_cash_to_pay_audit(request: Request) -> Dict[str, Any]:
         else:
             data = request.get_json(silent=True) or {}
         
-        query_type = data.get('query_type', 'invoice_summary')
+        query_type = data.get('query_type', 'partner_summary')
         id_partner = data.get('id_partner')
         cd_contract = data.get('cd_contract')
         
@@ -401,7 +522,11 @@ def jfc_cash_to_pay_audit(request: Request) -> Dict[str, Any]:
             where_clause = f" WHERE cd_contract = '{cd_contract}'"
         
         # Ejecutar query según tipo
-        if query_type == 'invoice_summary':
+        if query_type == 'partner_summary':
+            results = get_partner_summary(where_clause)
+            table_name = f'partner_summary_{datetime.now().strftime("%Y%m%d")}'
+            sheet_name = 'Partner Summary'
+        elif query_type == 'invoice_summary':
             results = get_invoice_summary(where_clause)
             table_name = f'invoice_summary_{datetime.now().strftime("%Y%m%d")}'
             sheet_name = 'Invoice Summary'
