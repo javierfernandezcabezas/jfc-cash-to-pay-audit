@@ -361,33 +361,6 @@ def get_partner_summary(where_clause: str = '') -> list:
       JOIN sessions s USING (session_id)
       GROUP BY s.id_partner
     ),
-    commission_invoice_partner AS (
-      SELECT
-        CAST(REPLACE(CAST(h.id_partner AS STRING), ',', '') AS INT64) AS id_partner,
-        SUM(
-          CASE
-            WHEN h.item_status = 'validated/expired' THEN h.variable_cc_for_fever
-            WHEN h.item_status = 'canceled'           THEN h.AMOUNT_TO_COLLECT_FEVER
-            ELSE 0
-          END
-        ) AS ticketing_commission,
-        SUM(
-          CASE
-            WHEN h.item_status = 'validated/expired' THEN h.variable_cc_for_fever * COALESCE(ts.tax, td.tax, 0)
-            WHEN h.item_status = 'canceled'           THEN h.AMOUNT_TO_COLLECT_FEVER * COALESCE(ts.tax, td.tax, 0)
-            ELSE 0
-          END
-        ) AS tax_commission
-      FROM base h
-      LEFT JOIN taxes_tab AS ts
-        ON ts.session_id = h.session_id
-       AND ts.ds_tax_apply_to = CAST(h.id_plan AS STRING)
-      LEFT JOIN taxes_tab AS td
-        ON td.session_id = h.session_id
-       AND td.ds_tax_apply_to = 'default'
-      WHERE h.item_status IN ('validated/expired','canceled')
-      GROUP BY h.id_partner
-    ),
     cancelled_info_tab AS (
       SELECT
         id_order_item,
