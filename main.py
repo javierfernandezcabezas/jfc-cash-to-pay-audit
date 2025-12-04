@@ -361,29 +361,6 @@ def get_partner_summary(where_clause: str = '') -> list:
       JOIN sessions s USING (session_id)
       GROUP BY s.id_partner
     ),
-    fixed_fees_invoice_partner AS (
-      SELECT
-        CAST(REPLACE(CAST(s.id_partner AS STRING), ',', '') AS INT64) AS id_partner,
-        SUM(fi.mkt_fixed_fees)     AS invoice_mkt_fixed_fee,
-        SUM(fi.fixed_fee_invoice)  AS invoice_fixed_fees_base,
-        SUM(fi.fixed_fee_invoice_tax) AS invoice_fixed_fees_tax
-      FROM fixed_fees_invoice fi
-      JOIN sessions s USING (session_id)
-      GROUP BY s.id_partner
-    ),
-    fixed_fees_settlement_partner AS (
-      SELECT
-        CAST(REPLACE(CAST(s.id_partner AS STRING), ',', '') AS INT64) AS id_partner,
-        SUM(fs.mkt_fixed_fees_base)     AS stl_mkt_base,
-        SUM(fs.mkt_fixed_fees_tax)      AS stl_mkt_tax,
-        SUM(fs.cash_advance_base)       AS stl_cash_base,
-        SUM(fs.cash_advance_tax)        AS stl_cash_tax,
-        SUM(fs.other_fixed_fees_base)   AS stl_other_base,
-        SUM(fs.other_fixed_fees_tax)    AS stl_other_tax
-      FROM fixed_fees_settlement fs
-      JOIN sessions s USING (session_id)
-      GROUP BY s.id_partner
-    ),
     commission_invoice_partner AS (
       SELECT
         CAST(REPLACE(CAST(h.id_partner AS STRING), ',', '') AS INT64) AS id_partner,
