@@ -228,26 +228,112 @@ def get_partner_summary(where_clause: str = '') -> list:
       WHERE session_id IN (SELECT session_id FROM sessions)
       GROUP BY session_id, ds_tax_apply_to
     ),
-    fixed_fees_tab_1 AS (
+    -- [2] Commission tab de invoice
+    commission_invoice_partner AS (
+      SELECT
+        CAST(REPLACE(CAST(h.id_partner AS STRING), ',', '') AS INT64) AS id_partner,
+        SUM(
+          CASE
+            WHEN h.item_status = 'validated/expired' THEN h.variable_cc_for_fever
+            WHEN h.item_status = 'canceled'           THEN h.AMOUNT_TO_COLLECT_FEVER
+            ELSE 0
+          END
+        ) AS ticketing_commission,
+        SUM(
+          CASE
+            WHEN h.item_status = 'validated/expired' THEN h.variable_cc_for_fever * COALESCE(ts.tax, td.tax, 0)
+            WHEN h.item_status = 'canceled'           THEN h.AMOUNT_TO_COLLECT_FEVER * COALESCE(ts.tax, td.tax, 0)
+            ELSE 0
+          END
+        ) AS tax_commission
+      FROM base h
+      LEFT JOIN taxes_tab AS ts
+        ON ts.session_id = h.session_id
+       AND ts.ds_tax_apply_to = CAST(h.id_plan AS STRING)
+      LEFT JOIN taxes_tab AS td
+        ON td.session_id = h.session_id
+       AND td.ds_tax_apply_to = 'default'
+      WHERE h.item_status IN ('validated/expired','canceled')
+      GROUP BY h.id_partner
+    ),
+    -- [3] Marketing fee de invoice
+    fixed_fees_invoice AS (
       SELECT
         f.session_id,
-        f.cd_contract,
-        f.ds_fixed_description,
-        f.ds_fixed_type,
-        f.apply_tax,
-        f.fixed_fee_invoice,
-        f.fixed_fee_settlement,
-        COALESCE(ts.tax, td.tax, 0) AS tax_rate_to_apply,
-        CASE
-          WHEN CAST(f.apply_tax AS STRING) = 'No' OR f.apply_tax = FALSE THEN 0
-          ELSE f.fixed_fee_invoice * COALESCE(ts.tax, td.tax, 0)
-        END AS fixed_fee_invoice_tax,
-        CASE
-          WHEN f.ds_fixed_type = 'Cash advance' THEN 0
-          WHEN f.ds_fixed_type NOT IN ('Marketing','Cash advance')
-               AND (CAST(f.apply_tax AS STRING) = 'No' OR f.apply_tax = FALSE) THEN 0
-          ELSE f.fixed_fee_settlement * COALESCE(ts.tax, td.tax, 0)
-        END AS fixed_fee_settlement_tax
+        COALESCE(
+          SUM(CASE WHEN f.ds_fixed_type = 'Marketing'
+                   THEN f.fixed_fee_invoice END), 0
+        ) AS mkt_fixed_fees
+      FROM `{T_FEES}` AS f
+      JOIN sessions s USING (session_id)
+      GROUP BY f.session_id
+    ),
+    fixed_fees_invoice_partner AS (
+      SELECT
+        CAST(REPLACE(CAST(s.id_partner AS STRING), ',', '') AS INT64) AS id_partner,
+        SUM(fi.mkt_fixed_fees) AS invoice_mkt_fixed_fee
+      FROM fixed_fees_invoice fi
+      JOIN sessions s USING (session_id)
+      GROUP BY s.id_partner
+    ),
+    -- Fixed fees settlement desglosado por tipo
+    fixed_fees_settlement AS (
+      SELECT
+        f.session_id,
+        -- MARKETING
+        SUM(
+          CASE WHEN f.ds_fixed_type = 'Marketing'
+               THEN f.fixed_fee_settlement ELSE 0 END
+        ) AS marketing_fixed_fees_total,
+        SUM(
+          CASE 
+            WHEN f.ds_fixed_type = 'Marketing' AND f.apply_tax = TRUE
+              THEN f.fixed_fee_settlement * COALESCE(ts.tax, td.tax, 0)
+            ELSE 0
+          END
+        ) AS marketing_fixed_fees_tax_total,
+        -- CASH ADVANCE (nunca lleva tax)
+        SUM(
+          CASE WHEN f.ds_fixed_type = 'Cash advance'
+               THEN f.fixed_fee_settlement ELSE 0 END
+        ) AS cash_advance_fixed_fees_total,
+        0 AS cash_advance_fixed_fees_tax_total,
+        -- SPONSORSHIP
+        SUM(
+          CASE WHEN f.ds_fixed_type = 'Sponsorship'
+               THEN f.fixed_fee_settlement ELSE 0 END
+        ) AS sponsorship_fixed_fees_total,
+        SUM(
+          CASE 
+            WHEN f.ds_fixed_type = 'Sponsorship' AND f.apply_tax = TRUE
+              THEN f.fixed_fee_settlement * COALESCE(ts.tax, td.tax, 0)
+            ELSE 0
+          END
+        ) AS sponsorship_fixed_fees_tax_total,
+        -- RECONCILIATION
+        SUM(
+          CASE WHEN f.ds_fixed_type = 'Reconciliation'
+               THEN f.fixed_fee_settlement ELSE 0 END
+        ) AS reconciliation_fixed_fees_total,
+        SUM(
+          CASE 
+            WHEN f.ds_fixed_type = 'Reconciliation' AND f.apply_tax = TRUE
+              THEN f.fixed_fee_settlement * COALESCE(ts.tax, td.tax, 0)
+            ELSE 0
+          END
+        ) AS reconciliation_fixed_fees_tax_total,
+        -- OTHER
+        SUM(
+          CASE WHEN f.ds_fixed_type = 'Other'
+               THEN f.fixed_fee_settlement ELSE 0 END
+        ) AS other_fixed_fees_total,
+        SUM(
+          CASE 
+            WHEN f.ds_fixed_type = 'Other' AND f.apply_tax = TRUE
+              THEN f.fixed_fee_settlement * COALESCE(ts.tax, td.tax, 0)
+            ELSE 0
+          END
+        ) AS other_fixed_fees_tax_total
       FROM `{T_FEES}` AS f
       JOIN sessions s USING (session_id)
       LEFT JOIN taxes_tab AS ts
@@ -256,52 +342,24 @@ def get_partner_summary(where_clause: str = '') -> list:
       LEFT JOIN taxes_tab AS td
         ON td.session_id = f.session_id
        AND td.ds_tax_apply_to = 'default'
+      GROUP BY f.session_id
     ),
-    fixed_fees_invoice AS (
+    fixed_fees_settlement_partner AS (
       SELECT
-        session_id,
-        COALESCE(
-          SUM(CASE WHEN ds_fixed_type = 'Marketing'
-                   THEN fixed_fee_invoice END), 0
-        ) AS mkt_fixed_fees,
-        SUM(fixed_fee_invoice)     AS fixed_fee_invoice,
-        SUM(fixed_fee_invoice_tax) AS fixed_fee_invoice_tax
-      FROM fixed_fees_tab_1
-      GROUP BY session_id
-    ),
-    fixed_fees_settlement AS (
-      SELECT
-        session_id,
-        COALESCE(SUM(
-          CASE WHEN ds_fixed_type = 'Marketing'
-               THEN fixed_fee_settlement END
-        ), 0) AS mkt_fixed_fees_base,
-        COALESCE(SUM(
-          CASE WHEN ds_fixed_type = 'Marketing'
-               THEN fixed_fee_settlement_tax END
-        ), 0) AS mkt_fixed_fees_tax,
-        COALESCE(SUM(
-          CASE WHEN ds_fixed_type = 'Cash advance'
-               THEN fixed_fee_settlement END
-        ), 0) AS cash_advance_base,
-        COALESCE(SUM(
-          CASE WHEN ds_fixed_type = 'Cash advance'
-               THEN fixed_fee_settlement_tax END
-        ), 0) AS cash_advance_tax,
-        COALESCE(SUM(
-          CASE
-            WHEN ds_fixed_type NOT IN ('Marketing','Cash advance')
-            THEN fixed_fee_settlement
-          END
-        ), 0) AS other_fixed_fees_base,
-        COALESCE(SUM(
-          CASE
-            WHEN ds_fixed_type NOT IN ('Marketing','Cash advance')
-            THEN fixed_fee_settlement_tax
-          END
-        ), 0) AS other_fixed_fees_tax
-      FROM fixed_fees_tab_1
-      GROUP BY session_id
+        CAST(REPLACE(CAST(s.id_partner AS STRING), ',', '') AS INT64) AS id_partner,
+        SUM(fs.marketing_fixed_fees_total) AS marketing_fixed_fees_total,
+        SUM(fs.marketing_fixed_fees_tax_total) AS marketing_fixed_fees_tax_total,
+        SUM(fs.cash_advance_fixed_fees_total) AS cash_advance_fixed_fees_total,
+        SUM(fs.cash_advance_fixed_fees_tax_total) AS cash_advance_fixed_fees_tax_total,
+        SUM(fs.sponsorship_fixed_fees_total) AS sponsorship_fixed_fees_total,
+        SUM(fs.sponsorship_fixed_fees_tax_total) AS sponsorship_fixed_fees_tax_total,
+        SUM(fs.reconciliation_fixed_fees_total) AS reconciliation_fixed_fees_total,
+        SUM(fs.reconciliation_fixed_fees_tax_total) AS reconciliation_fixed_fees_tax_total,
+        SUM(fs.other_fixed_fees_total) AS other_fixed_fees_total,
+        SUM(fs.other_fixed_fees_tax_total) AS other_fixed_fees_tax_total
+      FROM fixed_fees_settlement fs
+      JOIN sessions s USING (session_id)
+      GROUP BY s.id_partner
     ),
     fixed_fees_invoice_partner AS (
       SELECT
@@ -394,27 +452,39 @@ def get_partner_summary(where_clause: str = '') -> list:
     )
     SELECT
       CAST(REPLACE(CAST(p.id_partner AS STRING), ',', '') AS INT64) AS id_partner,
+      -- [1] revenue_collected_by_fever (sin purchased)
       COALESCE(r.revenue_collected_by_fever_no_purchased, 0) AS gross_collected,
+      -- [2] commission de ticketing
       COALESCE(ci.ticketing_commission, 0) AS commission,
+      -- [3] marketing fee de invoice
+      COALESCE(fi.invoice_mkt_fixed_fee, 0) AS marketing_fees,
+      -- [4] total taxes = tax_commission + suma de taxes de fixed fees settlement
       (
         COALESCE(ci.tax_commission, 0)
-        + COALESCE(fs.stl_mkt_tax,   0)
-        + COALESCE(fs.stl_cash_tax,  0)
-        + COALESCE(fs.stl_other_tax, 0)
+        + COALESCE(fs.marketing_fixed_fees_tax_total, 0)
+        + COALESCE(fs.cash_advance_fixed_fees_tax_total, 0)
+        + COALESCE(fs.sponsorship_fixed_fees_tax_total, 0)
+        + COALESCE(fs.reconciliation_fixed_fees_tax_total, 0)
+        + COALESCE(fs.other_fixed_fees_tax_total, 0)
       ) AS total_taxes,
+      -- [5] partner payment = [1] - [2] - fixed_fees_total (sin taxes) - [4]
       (
         COALESCE(r.revenue_collected_by_fever_no_purchased, 0)
         - COALESCE(ci.ticketing_commission, 0)
         - (
-            COALESCE(fs.stl_mkt_base,   0)
-            + COALESCE(fs.stl_cash_base, 0)
-            + COALESCE(fs.stl_other_base, 0)
+            COALESCE(fs.marketing_fixed_fees_total, 0)
+            + COALESCE(fs.cash_advance_fixed_fees_total, 0)
+            + COALESCE(fs.sponsorship_fixed_fees_total, 0)
+            + COALESCE(fs.reconciliation_fixed_fees_total, 0)
+            + COALESCE(fs.other_fixed_fees_total, 0)
           )
         - (
             COALESCE(ci.tax_commission, 0)
-            + COALESCE(fs.stl_mkt_tax,   0)
-            + COALESCE(fs.stl_cash_tax,  0)
-            + COALESCE(fs.stl_other_tax, 0)
+            + COALESCE(fs.marketing_fixed_fees_tax_total, 0)
+            + COALESCE(fs.cash_advance_fixed_fees_tax_total, 0)
+            + COALESCE(fs.sponsorship_fixed_fees_tax_total, 0)
+            + COALESCE(fs.reconciliation_fixed_fees_tax_total, 0)
+            + COALESCE(fs.other_fixed_fees_tax_total, 0)
           )
       ) AS pago_al_partner
     FROM (
